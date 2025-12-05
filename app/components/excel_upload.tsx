@@ -22,9 +22,6 @@ import { ExcelDataTable } from "./excel_data_table";
 import { ErrorAlert } from "./error_alert";
 
 export function ExcelUploader() {
-  // ===========================================
-  // ZUSTAND STORE STATE & ACTIONS
-  // ===========================================
   const {
     data,
     cellErrors,
@@ -42,38 +39,37 @@ export function ExcelUploader() {
     updateCell,
   } = useExcelUploadStore();
 
-  // ===========================================
-  // FILE PROCESSING HANDLER
-  // ===========================================
+  const revalidateData = useCallback(() => {
+    const currentData = useExcelUploadStore.getState().data;
+    const currentColumns = useExcelUploadStore.getState().columns;
+
+    const errors = validateAllCells(currentData, currentColumns);
+    setCellErrors(errors);
+
+    const duplicateIndices = findDuplicates(currentData, "email");
+    setDuplicates(duplicateIndices);
+  }, [setCellErrors, setDuplicates]);
+
   const processExcelFile = useCallback(
     async (file: File) => {
       setIsProcessing(true);
       setFileName(file.name);
 
       try {
-        // Read the file as array buffer
         const arrayBuffer = await file.arrayBuffer();
-
-        // Parse the Excel workbook
         const workbook = XLSX.read(arrayBuffer, { type: "array" });
-
-        // Get the first sheet
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
-
-        // Convert to JSON with header row
         const jsonData = XLSX.utils.sheet_to_json<Record<string, unknown>>(
           worksheet,
-          { defval: "" } // Default value for empty cells
+          { defval: "" }
         );
 
-        // Add unique IDs to each row for React key prop
         const dataWithIds: ExcelRow[] = jsonData.map((row) => ({
           ...row,
           id: uuidv4(),
         }));
 
-        // Extract column headers (excluding 'id')
         const extractedColumns =
           jsonData.length > 0
             ? Object.keys(jsonData[0]).filter((col) => col !== "id")
@@ -82,25 +78,18 @@ export function ExcelUploader() {
         setColumns(extractedColumns);
         setData(dataWithIds);
 
-        // ===========================================
-        // VALIDATION: Check all cells for errors
-        // ===========================================
         const errors = validateAllCells(dataWithIds, extractedColumns);
         setCellErrors(errors);
 
-        // ===========================================
-        // DUPLICATE DETECTION: Find duplicate rows
-        // ===========================================
         const duplicateIndices = findDuplicates(dataWithIds, "email");
         setDuplicates(duplicateIndices);
       } catch (error) {
-        console.error("Error processing Excel file:", error);
+        console.error("Error processing file:", error);
         setCellErrors([
           {
             row: -1,
             column: "file",
-            message:
-              "Failed to parse Excel file.  Please check the file format.",
+            message: "Failed to parse file. Check the format.",
             value: null,
           },
         ]);
@@ -118,19 +107,17 @@ export function ExcelUploader() {
     ]
   );
 
-  // ===========================================
-  // DROPZONE CONFIGURATION
-  // ===========================================
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
       const file = acceptedFiles[0];
-      if (file) {
-        processExcelFile(file);
-      }
+      if (file) processExcelFile(file);
     },
     [processExcelFile]
   );
 
+  // ===========================================
+  // FIX: Removed extra spaces in MIME types
+  // ===========================================
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
@@ -140,92 +127,70 @@ export function ExcelUploader() {
       "application/vnd.ms-excel": [".xls"],
       "text/csv": [".csv"],
     },
-    multiple: false, // Only allow single file
-    disabled: isProcessing, // Disable during processing
+    multiple: false,
+    disabled: isProcessing,
   });
 
-  // ===========================================
-  // REMOVE DUPLICATES HANDLER
-  // ===========================================
   const handleRemoveDuplicates = useCallback(() => {
     const cleanedData = removeDuplicates(data, "email");
     setData(cleanedData);
-    setDuplicates([]); // Clear duplicate indicators
-
-    // Re-validate after removing duplicates
+    setDuplicates([]);
     const errors = validateAllCells(cleanedData, columns);
     setCellErrors(errors);
   }, [data, columns, setData, setDuplicates, setCellErrors]);
 
-  // ===========================================
-  // CELL UPDATE HANDLER (for inline editing)
-  // ===========================================
   const handleCellUpdate = useCallback(
     (rowIndex: number, column: string, value: unknown) => {
       updateCell(rowIndex, column, value);
 
-      // Re-validate the entire dataset after update
       const updatedData = [...data];
       updatedData[rowIndex] = { ...updatedData[rowIndex], [column]: value };
 
       const errors = validateAllCells(updatedData, columns);
       setCellErrors(errors);
 
-      // Re-check for duplicates
       const duplicateIndices = findDuplicates(updatedData, "email");
       setDuplicates(duplicateIndices);
     },
     [data, columns, updateCell, setCellErrors, setDuplicates]
   );
 
-  // ===========================================
-  // COMPLETE/SUBMIT HANDLER
-  // ===========================================
   const handleComplete = useCallback(async () => {
-    // Convert data to JSON (removes internal 'id' field)
     const jsonPayload = convertToJson(data);
-
     console.log("Bulk Upload Payload:", JSON.stringify(jsonPayload, null, 2));
 
     // ===========================================
     // TODO: Send to your backend API
     // ===========================================
-    // Example:
+    // Example implementation:
     // try {
     //   const response = await fetch('/api/bulk-upload', {
     //     method: 'POST',
     //     headers: { 'Content-Type': 'application/json' },
     //     body: JSON.stringify(jsonPayload),
     //   });
+    //
     //   if (response.ok) {
-    //     // Handle success
+    //     alert('Upload successful!');
     //     clearAll();
+    //   } else {
+    //     throw new Error('Upload failed');
     //   }
     // } catch (error) {
-    //   // Handle error
+    //   console.error('Upload error:', error);
+    //   alert('Upload failed.  Please try again.');
     // }
-
     alert(
-      `Ready to upload ${jsonPayload.length} records!\nCheck console for JSON payload.`
+      `Ready to upload ${jsonPayload.length} records!\nCheck console for JSON. `
     );
   }, [data]);
 
-  // ===========================================
-  // COMPUTED VALUES
-  // ===========================================
-  // Check if there are any errors or duplicates
   const hasErrors = cellErrors.length > 0;
   const hasDuplicates = duplicates.length > 0;
-
-  // Disable complete button if there are errors or duplicates
   const isCompleteDisabled = hasErrors || hasDuplicates || data.length === 0;
 
-  // ===========================================
-  // RENDER
-  // ===========================================
   return (
     <div className="w-full max-w-7xl mx-auto p-6 space-y-6">
-      {/* Header */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -234,14 +199,10 @@ export function ExcelUploader() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {/* ===========================================
-              DROPZONE AREA
-              =========================================== */}
           <div
             {...getRootProps()}
             className={`
-              border-2 border-dashed rounded-lg p-8 text-center cursor-pointer
-              transition-colors duration-200
+              border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
               ${
                 isDragActive
                   ? "border-primary bg-primary/5"
@@ -251,7 +212,6 @@ export function ExcelUploader() {
             `}
           >
             <input {...getInputProps()} />
-
             {isProcessing ? (
               <div className="flex flex-col items-center gap-2">
                 <Loader2 className="h-10 w-10 animate-spin text-primary" />
@@ -262,17 +222,16 @@ export function ExcelUploader() {
                 <Upload className="h-10 w-10 text-muted-foreground" />
                 <p className="text-lg font-medium">
                   {isDragActive
-                    ? "Drop the Excel file here"
-                    : "Drag & drop an Excel file here, or click to select"}
+                    ? "Drop file here"
+                    : "Drag & drop or click to select"}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  Supports . xlsx, .xls, and .csv files
+                  Supports . xlsx, .xls, .csv
                 </p>
               </div>
             )}
           </div>
 
-          {/* File name display */}
           {fileName && (
             <p className="mt-4 text-sm text-muted-foreground">
               Loaded file: <span className="font-medium">{fileName}</span>
@@ -281,9 +240,6 @@ export function ExcelUploader() {
         </CardContent>
       </Card>
 
-      {/* ===========================================
-          ERROR ALERTS SECTION
-          =========================================== */}
       {hasErrors && (
         <ErrorAlert
           errors={cellErrors}
@@ -292,7 +248,6 @@ export function ExcelUploader() {
         />
       )}
 
-      {/* Duplicate Warning Alert */}
       {hasDuplicates && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
@@ -314,9 +269,6 @@ export function ExcelUploader() {
         </Alert>
       )}
 
-      {/* ===========================================
-          DATA TABLE SECTION
-          =========================================== */}
       {data.length > 0 && (
         <Card>
           <CardHeader>
@@ -329,22 +281,18 @@ export function ExcelUploader() {
               cellErrors={cellErrors}
               duplicates={duplicates}
               onCellUpdate={handleCellUpdate}
+              onDataChange={revalidateData}
             />
           </CardContent>
         </Card>
       )}
 
-      {/* ===========================================
-          ACTION BUTTONS
-          =========================================== */}
       {data.length > 0 && (
         <div className="flex justify-end gap-4">
-          {/* Clear Button */}
           <Button variant="outline" onClick={clearAll}>
             Clear All
           </Button>
 
-          {/* Complete/Submit Button - Disabled if errors exist */}
           <Button
             onClick={handleComplete}
             disabled={isCompleteDisabled}

@@ -2,57 +2,71 @@ import { z } from "zod";
 import { CellError, ExcelRow } from "@/app/stores/excel_upload_store";
 
 // ===========================================
-// CUSTOMIZE THIS SCHEMA FOR YOUR EXCEL DATA
+// ZOD V4 VALIDATION SCHEMA
 // ===========================================
-// Define the expected structure of each Excel row
-// Modify these fields based on your Excel file columns
+// In Zod v4, use { message: '.. .' } for error customization
+// instead of { required_error, invalid_type_error }
+// ===========================================
 
-// Zod v4 compatible schema
 export const ExcelRowSchema = z.object({
-  // Email field - must be valid email format
+  // Email: Required, valid format
   email: z
-    .string({ message: "Email is required and must be a string" })
+    .string({ message: "Email is required" })
     .email({ message: "Invalid email format" })
     .min(1, { message: "Email cannot be empty" }),
 
-  // Name field - required string with min length
+  // Name: Required, 2-100 characters
   name: z
-    .string({ message: "Name is required and must be a string" })
+    .string({ message: "Name is required" })
     .min(2, { message: "Name must be at least 2 characters" })
     .max(100, { message: "Name cannot exceed 100 characters" }),
 
-  // Phone field - optional but must match pattern if provided
+  // Phone: Optional, must match pattern if provided
   phone: z
     .string()
-    .regex(/^[\d\s\-+()]*$/, { message: "Invalid phone number format" })
+    .regex(/^[\d\s\-+()]*$/, { message: "Invalid phone format" })
     .optional()
     .or(z.literal("")),
 
-  // Age field - must be a positive number within range
+  // Age: Required, positive integer 0-150
   age: z
-    .number({ message: "Age is required and must be a number" })
+    .number({ message: "Age must be a number" })
     .int({ message: "Age must be a whole number" })
     .min(0, { message: "Age cannot be negative" })
     .max(150, { message: "Age cannot exceed 150" }),
 
-  // Department field - must be one of allowed values
+  // Department: Required, must be one of allowed values
   department: z.enum(["Engineering", "Marketing", "Sales", "HR", "Finance"], {
     message:
-      "Department must be one of: Engineering, Marketing, Sales, HR, Finance",
+      "Invalid department.  Must be: Engineering, Marketing, Sales, HR, or Finance",
   }),
 
-  // Date field - must be valid date string
+  // Join Date: Optional, must be valid date if provided
   joinDate: z
     .string()
-    .refine((val) => !isNaN(Date.parse(val)), {
+    .refine((val) => !val || !isNaN(Date.parse(val)), {
       message: "Invalid date format",
     })
     .optional()
     .or(z.literal("")),
+
+  // School: Required, autocomplete field
+  // Fetches suggestions from backend
+  school: z
+    .string({ message: "School is required" })
+    .min(2, { message: "School must be at least 2 characters" })
+    .max(200, { message: "School name too long" }),
 });
 
 // Type inference from schema
 export type ValidExcelRow = z.infer<typeof ExcelRowSchema>;
+
+// ===========================================
+// AUTOCOMPLETE COLUMNS CONFIGURATION
+// ===========================================
+// Add column names here that should render as
+// autocomplete inputs with backend suggestions
+export const AUTOCOMPLETE_COLUMNS = ["school"];
 
 // ===========================================
 // VALIDATION FUNCTIONS
@@ -60,7 +74,7 @@ export type ValidExcelRow = z.infer<typeof ExcelRowSchema>;
 
 /**
  * Validates a single cell value against its column schema
- * Returns an error message if validation fails, null otherwise
+ * @returns CellError if validation fails, null otherwise
  */
 export function validateCell(
   column: string,
@@ -68,42 +82,30 @@ export function validateCell(
   row: number
 ): CellError | null {
   try {
-    // Get the schema shape to validate individual fields
     const shape = ExcelRowSchema.shape;
 
-    // Check if this column exists in our schema
     if (column in shape) {
       const fieldSchema = shape[column as keyof typeof shape];
       const result = fieldSchema.safeParse(value);
 
       if (!result.success) {
-        // Zod v4: Access error messages differently
+        // Zod v4: Access error messages
         const errorMessage =
           result.error.issues?.[0]?.message || "Invalid value";
 
-        return {
-          row,
-          column,
-          message: errorMessage,
-          value,
-        };
+        return { row, column, message: errorMessage, value };
       }
     }
 
     return null;
   } catch {
-    return {
-      row,
-      column,
-      message: "Validation error occurred",
-      value,
-    };
+    return { row, column, message: "Validation error", value };
   }
 }
 
 /**
- * Validates all cells in the Excel data
- * Returns an array of all cell-level errors
+ * Validates all cells in the dataset
+ * @returns Array of all cell errors
  */
 export function validateAllCells(
   data: ExcelRow[],
@@ -111,11 +113,9 @@ export function validateAllCells(
 ): CellError[] {
   const errors: CellError[] = [];
 
-  // Iterate through each row and column
   data.forEach((row, rowIndex) => {
     columns.forEach((column) => {
-      // Skip the 'id' column (internal use)
-      if (column === "id") return;
+      if (column === "id") return; // Skip internal ID column
 
       const error = validateCell(column, row[column], rowIndex);
       if (error) {
@@ -128,8 +128,9 @@ export function validateAllCells(
 }
 
 /**
- * Finds duplicate rows based on a unique key (e.g., email)
- * Returns indices of duplicate rows (keeps first occurrence)
+ * Finds duplicate rows based on a unique key field
+ * @param uniqueKey - Column name to check for duplicates (default: 'email')
+ * @returns Array of indices for duplicate rows (keeps first occurrence)
  */
 export function findDuplicates(
   data: ExcelRow[],
@@ -143,10 +144,8 @@ export function findDuplicates(
 
     if (keyValue !== undefined && keyValue !== null && keyValue !== "") {
       if (seen.has(keyValue)) {
-        // This is a duplicate - add its index
         duplicateIndices.push(index);
       } else {
-        // First occurrence - store the index
         seen.set(keyValue, index);
       }
     }
@@ -156,8 +155,7 @@ export function findDuplicates(
 }
 
 /**
- * Removes duplicate rows from data
- * Keeps the first occurrence of each unique key
+ * Removes duplicate rows, keeping first occurrence
  */
 export function removeDuplicates(
   data: ExcelRow[],
@@ -168,13 +166,12 @@ export function removeDuplicates(
   return data.filter((row) => {
     const keyValue = row[uniqueKey];
 
-    // Keep rows with empty/null unique keys
     if (keyValue === undefined || keyValue === null || keyValue === "") {
       return true;
     }
 
     if (seen.has(keyValue)) {
-      return false; // Remove duplicate
+      return false;
     }
 
     seen.add(keyValue);
@@ -183,7 +180,7 @@ export function removeDuplicates(
 }
 
 /**
- * Converts validated Excel data to JSON for backend upload
+ * Converts Excel data to JSON for backend upload
  * Removes internal 'id' field before sending
  */
 export function convertToJson(data: ExcelRow[]): Omit<ExcelRow, "id">[] {
