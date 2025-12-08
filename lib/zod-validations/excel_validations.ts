@@ -29,7 +29,7 @@ export const ExcelRowSchema = z.object({
     .or(z.literal("")),
 
   // Age: Required, positive integer 0-150
-  age: z
+  age: z.coerce
     .number({ message: "Age must be a number" })
     .int({ message: "Age must be a whole number" })
     .min(0, { message: "Age cannot be negative" })
